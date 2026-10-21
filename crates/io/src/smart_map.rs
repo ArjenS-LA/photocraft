@@ -869,7 +869,7 @@ pub fn filter_from_item(item: &Descriptor) -> SmartFilter {
             let mut neutral = item.clone();
             for (k, v) in &mut neutral.items {
                 if k.is("blendOptions") {
-                    *v = blend_options(&SmartFilter { command: String::new(), params: J::Null, blend: BlendMode::Normal, opacity: 1.0, visible: true });
+                    *v = blend_options(&SmartFilter { command: String::new(), params: J::Null.into(), blend: BlendMode::Normal, opacity: 1.0, visible: true });
                 } else if k.is("enab") {
                     *v = Value::Boolean(true);
                 }
@@ -877,7 +877,7 @@ pub fn filter_from_item(item: &Descriptor) -> SmartFilter {
             (UNSUPPORTED_FILTER.to_string(), json!({"name": name.replace('&', ""), "filterID": filter_id, "psd": to_hex(&neutral.to_bytes())}))
         }
     };
-    SmartFilter { command, params, blend, opacity, visible }
+    SmartFilter { command, params: params.into(), blend, opacity, visible }
 }
 
 // ---------- writing ----------
@@ -1685,7 +1685,7 @@ mod tests {
     }
 
     fn sf(command: &str, params: J) -> SmartFilter {
-        SmartFilter { command: command.into(), params, blend: BlendMode::Normal, opacity: 1.0, visible: true }
+        SmartFilter { command: command.into(), params: params.into(), blend: BlendMode::Normal, opacity: 1.0, visible: true }
     }
 
     #[test]
@@ -2966,7 +2966,7 @@ mod tests {
         let f = filter_from_item(&gallery_item_with(vec![chrome(12, 4, true), chrome(3, 9, false)]));
         assert_eq!(f.command, "filter.filterGallery");
         assert_eq!(
-            f.params,
+            *f.params,
             json!({
                 "effects": [
                     {"filter": "chrome", "params": {"detail": 12, "smoothness": 4}, "visible": true},
@@ -3012,7 +3012,7 @@ mod tests {
         let f = filter_from_item(&item);
         assert_eq!(f.command, "filter.filterGallery");
         assert_eq!(
-            f.params,
+            *f.params,
             json!({
                 "effects": [{"filter": "chrome", "params": {"detail": 10, "smoothness": 4}, "visible": true}],
                 "foreground": [1.0, 1.0, 1.0, 1.0],
@@ -3026,7 +3026,7 @@ mod tests {
         assert_eq!(filter_from_item(&Descriptor::from_bytes(&d.to_bytes()).unwrap()), f);
         // A hidden single effect needs the list (only it has a visibility flag).
         let mut hidden = f.clone();
-        hidden.params["effects"][0]["visible"] = json!(false);
+        std::sync::Arc::make_mut(&mut hidden.params)["effects"][0]["visible"] = json!(false);
         let d = item_for_filter(&hidden).unwrap();
         assert!(get_desc(&d, "Fltr").unwrap().get("GEfs").is_some());
         assert_eq!(filter_from_item(&d), hidden);

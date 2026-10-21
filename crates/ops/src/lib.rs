@@ -6,7 +6,7 @@
 //! same approach Photoshop's History panel exposes to users (one state per step).
 //!
 //! Memory is bounded by `max_states` plus an approximate byte budget. The current document's
-//! tiles and tiles only history holds count against it, including selection masks.
+//! tiles and shared filter parameters count against it, including allocations only history holds.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -45,7 +45,7 @@ pub struct History {
     /// Lazily initialized when a byte budget is used; unlimited histories pay no counting cost.
     tiles: Option<tiles::Tiles>,
     pub max_states: usize,
-    /// Pixel memory budget in bytes for the current document plus the tiles only history holds
+    /// Retained tile/filter-parameter budget in bytes for the current document plus history
     /// (0 = unlimited). [`History::trim`] drops the oldest states beyond it.
     pub max_bytes: usize,
     /// Label of the step that produced the current document.
@@ -344,14 +344,14 @@ impl History {
         undo.iter().chain(redo.iter())
     }
 
-    /// Approximate unique pixel bytes held by history (tiles not shared with `current`).
+    /// Approximate unique tile/filter-parameter bytes held by history (not shared with `current`).
     pub fn unique_bytes(&self, current: &Document) -> usize {
         let mut seen = HashSet::new();
         tile_bytes(current, &mut seen);
-        self.held_states().map(|s| tile_bytes(&s.doc, &mut seen)).sum()
+        self.held_states().fold(0usize, |n, s| n.saturating_add(tile_bytes(&s.doc, &mut seen)))
     }
 
-    /// Pixel bytes of `current` plus the tiles only history holds (what [`History::trim`]
+    /// Retained tile/filter-parameter bytes of `current` plus history (what [`History::trim`]
     /// bounds by [`History::max_bytes`]).
     pub fn pixel_bytes(&self, current: &Document) -> usize {
         if let Some(tiles) = &self.tiles {
@@ -362,7 +362,7 @@ impl History {
         self.held_states().fold(own, |n, s| n.saturating_add(tile_bytes(&s.doc, &mut seen)))
     }
 
-    /// Bytes of the tiles only `extra` documents hold (History panel snapshots, #4530): not
+    /// Bytes of allocations only `extra` documents hold (History panel snapshots, #4530): not
     /// `current`'s and not any state's. 0 without `extra`, without walking the states.
     pub fn extra_bytes(&self, current: &Document, extra: &[&Document]) -> usize {
         if extra.is_empty() {
@@ -376,7 +376,7 @@ impl History {
         extra.iter().fold(0, |n, d| n.saturating_add(tile_bytes(d, &mut seen)))
     }
 
-    /// [`History::unique_bytes`] less the tiles `keep` documents also hold: what clearing the
+    /// [`History::unique_bytes`] less the allocations `keep` documents also hold: what clearing the
     /// history frees while they stay (Edit › Purge › Histories keeps the snapshots).
     pub fn unique_bytes_besides(&self, current: &Document, keep: &[&Document]) -> usize {
         let mut seen = HashSet::new();
@@ -397,7 +397,7 @@ impl History {
         self.trim_with(current, &[])
     }
 
-    /// [`History::trim`] counting the tiles only `pinned` documents hold (History panel
+    /// [`History::trim`] counting the allocations only `pinned` documents hold (History panel
     /// snapshots, which outlive the states) against the budget too, so they can't take memory
     /// beyond it unseen (#4530). The most recent state is still always kept.
     pub fn trim_with(&mut self, current: &Document, pinned: &[&Document]) -> usize {
@@ -469,14 +469,12 @@ impl History {
     }
 }
 
-/// Bytes of the pixel tiles of `doc` (layers, masks, fill caches, smart filter masks, alpha channels, selection) not already in `seen`.
+/// Retained tile/filter-parameter allocations of `doc` not already in `seen`.
 fn tile_bytes(doc: &Document, seen: &mut HashSet<usize>) -> usize {
     let mut n = 0usize;
-    tiles::surfaces(doc, |surface| {
-        for (_, tile) in surface.tiles() {
-            if seen.insert(Arc::as_ptr(tile) as usize) {
-                n = n.saturating_add(tile.bytes().len());
-            }
+    tiles::allocations(doc, |key, bytes| {
+        if seen.insert(key) {
+            n = n.saturating_add(bytes);
         }
     });
     n

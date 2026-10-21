@@ -1113,7 +1113,7 @@ fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
         if f.command == photocraft_io::smart_map::UNSUPPORTED_FILTER {
             return Err(bad(CMD, "this smart filter isn't implemented in PhotoCraft: it is kept as is (it can be hidden, moved or deleted)"));
         }
-        match (&mut f.params, new) {
+        match (Arc::make_mut(&mut f.params), new) {
             (Value::Object(old), Value::Object(n)) => old.extend(n),
             (slot, n) => *slot = n,
         }

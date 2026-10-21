@@ -559,10 +559,38 @@ pub enum SmartSource {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SmartFilter {
     pub command: String,
-    pub params: serde_json::Value,
+    /// Immutable parameters shared by document/history clones. Edit with `Arc::make_mut` so
+    /// changing a filter cannot mutate an undo state. Serde keeps the legacy JSON shape.
+    pub params: Arc<serde_json::Value>,
     pub blend: BlendMode,
     pub opacity: f32,
     pub visible: bool,
+}
+
+impl SmartFilter {
+    /// Approximate retained allocation size for the history budget, including large strings
+    /// such as embedded PSD templates. Container allocator overhead is approximate, as for
+    /// pixel tiles; string capacities and array storage are counted without serializing.
+    pub fn parameter_bytes(&self) -> usize {
+        fn heap(value: &serde_json::Value, depth: usize) -> usize {
+            // Values loaded from files already have a nesting limit. Fail closed for a caller
+            // constructing deeper parameters instead of recursing without a bound.
+            if depth > 128 {
+                return usize::MAX;
+            }
+            match value {
+                serde_json::Value::String(s) => s.capacity(),
+                serde_json::Value::Array(values) => {
+                    values.iter().fold(values.capacity().saturating_mul(std::mem::size_of::<serde_json::Value>()), |n, v| n.saturating_add(heap(v, depth + 1)))
+                }
+                serde_json::Value::Object(values) => values.iter().fold(0usize, |n, (key, v)| {
+                    n.saturating_add(std::mem::size_of::<(String, serde_json::Value)>()).saturating_add(key.capacity()).saturating_add(heap(v, depth + 1))
+                }),
+                _ => 0,
+            }
+        }
+        std::mem::size_of::<serde_json::Value>().saturating_add(2 * std::mem::size_of::<usize>()).saturating_add(heap(&self.params, 0))
+    }
 }
 
 /// Pixels rendered by another application (Photoshop) for a fill layer.
