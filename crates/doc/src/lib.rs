@@ -572,24 +572,51 @@ impl SmartFilter {
     /// such as embedded PSD templates. Container allocator overhead is approximate, as for
     /// pixel tiles; string capacities and array storage are counted without serializing.
     pub fn parameter_bytes(&self) -> usize {
-        fn heap(value: &serde_json::Value, depth: usize) -> usize {
-            // Values loaded from files already have a nesting limit. Fail closed for a caller
-            // constructing deeper parameters instead of recursing without a bound.
-            if depth > 128 {
-                return usize::MAX;
-            }
-            match value {
-                serde_json::Value::String(s) => s.capacity(),
-                serde_json::Value::Array(values) => {
-                    values.iter().fold(values.capacity().saturating_mul(std::mem::size_of::<serde_json::Value>()), |n, v| n.saturating_add(heap(v, depth + 1)))
-                }
-                serde_json::Value::Object(values) => values.iter().fold(0usize, |n, (key, v)| {
-                    n.saturating_add(std::mem::size_of::<(String, serde_json::Value)>()).saturating_add(key.capacity()).saturating_add(heap(v, depth + 1))
-                }),
-                _ => 0,
-            }
+        enum Children<'a> {
+            Array(std::slice::Iter<'a, serde_json::Value>),
+            Object(serde_json::map::Iter<'a>),
         }
-        std::mem::size_of::<serde_json::Value>().saturating_add(2 * std::mem::size_of::<usize>()).saturating_add(heap(&self.params, 0))
+        // Walk depth-first without recursion or a second nesting limit. The native format
+        // accepts parameters deeper than serde_json's default 128 levels. Retain only one
+        // iterator per ancestor, not a worklist proportional to an array's width.
+        let mut parents = Vec::new();
+        let mut total = std::mem::size_of::<serde_json::Value>().saturating_add(2 * std::mem::size_of::<usize>());
+        let mut next = Some((self.params.as_ref(), 0usize));
+        while let Some((value, entry_bytes)) = next {
+            total = total.saturating_add(entry_bytes);
+            let children = match value {
+                serde_json::Value::String(s) => {
+                    total = total.saturating_add(s.capacity());
+                    None
+                }
+                serde_json::Value::Array(values) => {
+                    total = total.saturating_add(values.capacity().saturating_mul(std::mem::size_of::<serde_json::Value>()));
+                    Some(Children::Array(values.iter()))
+                }
+                serde_json::Value::Object(values) => Some(Children::Object(values.iter())),
+                _ => None,
+            };
+            if let Some(children) = children {
+                if parents.try_reserve(1).is_err() {
+                    return usize::MAX;
+                }
+                parents.push(children);
+            }
+            next = loop {
+                let Some(parent) = parents.last_mut() else { break None };
+                let child = match parent {
+                    Children::Array(values) => values.next().map(|v| (v, 0)),
+                    Children::Object(values) => {
+                        values.next().map(|(key, v)| (v, std::mem::size_of::<(String, serde_json::Value)>().saturating_add(key.capacity())))
+                    }
+                };
+                if child.is_some() {
+                    break child;
+                }
+                parents.pop();
+            };
+        }
+        total
     }
 }
 
