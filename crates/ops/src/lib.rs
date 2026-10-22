@@ -387,10 +387,10 @@ impl History {
         self.held_states().fold(0, |n, s| n.saturating_add(tile_bytes(&s.doc, &mut seen)))
     }
 
-    /// Keep pixel memory within [`History::max_bytes`]: the current document's tiles plus the
-    /// tiles only history holds (newest states first). The oldest undo states that don't fit are
+    /// Keep retained tile/filter-parameter memory within [`History::max_bytes`]: the current
+    /// document plus allocations only history holds (newest states first). The oldest undo states that don't fit are
     /// dropped; the most recent one is always kept so the last step can be undone. The History
-    /// Brush's source state ([`History::set_brush_source`]) is never dropped: its unique tiles are
+    /// Brush's source state ([`History::set_brush_source`]) is never dropped: its unique allocations are
     /// counted first, and the newest states fill what remains. Returns how many states were
     /// dropped.
     pub fn trim(&mut self, current: &Document) -> usize {

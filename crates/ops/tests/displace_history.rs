@@ -122,3 +122,27 @@ fn aliased_filters_and_snapshots_are_counted_once() {
     let empty = Document::new("empty", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
     assert_eq!(history.extra_bytes(&empty, &[&pinned, &pinned]), expected);
 }
+
+#[test]
+fn cleared_history_retains_filter_payloads_until_the_next_edit() {
+    let mut current = Arc::new(document());
+    let mut history = History::new(20);
+    edit(&mut history, &mut current, |d| d.name = "renamed".into());
+    edit(&mut history, &mut current, |d| {
+        let LayerContent::Smart(smart) = &mut d.layers[0].content else { panic!("fixture") };
+        smart.smart_filters[0].params = json!({"__displacePsd": "cd".repeat(4096)}).into();
+    });
+    let retained = history.pixel_bytes(&current);
+    let unique = history.unique_bytes(&current);
+    assert!(unique >= 16384, "old filter payload is retained by undo");
+    assert!(history.clear_states());
+    assert_eq!(history.pixel_bytes(&current), retained);
+    assert_eq!(history.unique_bytes(&current), unique, "undoable Clear History still owns the old payload");
+    let (restored, _) = history.undo(current.clone()).unwrap();
+    current = restored;
+    assert_eq!(history.pixel_bytes(&current), retained);
+    assert!(history.clear_states());
+    edit(&mut history, &mut current, |d| d.name = "after clear".into());
+    assert_eq!(history.unique_bytes(&current), 0);
+    assert_eq!(history.pixel_bytes(&current), History::default().pixel_bytes(&current));
+}

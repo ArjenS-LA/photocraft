@@ -187,7 +187,7 @@ pub fn embed_map(params: &J, map: &Image) -> Option<J> {
     let enumerated = |t: &str, v: &str| Value::Enumerated { type_id: Id::new(t), value: Id::new(v) };
     // The settings here are placeholders: the params' own replace them when the filter renders
     // and when it is written to PSD (`export_item`).
-    let neutral = SmartFilter { command: String::new(), params: J::Null, blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
+    let neutral = SmartFilter { command: String::new(), params: J::Null.into(), blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
     let item = Descriptor::new("filterFX")
         .with("Nm  ", Value::Text(photocraft_psd::descriptor::UnicodeString::new_nul("Displace...")))
         .with("blendOptions", blend_options(&neutral))
