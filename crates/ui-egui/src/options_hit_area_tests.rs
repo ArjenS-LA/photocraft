@@ -220,6 +220,6 @@ fn options_bar_has_a_single_full_width_border() {
                 _ => None,
             })
             .collect();
-        assert!(borders.len() <= 1, "{kind:?}: the options bar draws its own borders on top of the panel's: {borders:?}");
+        assert_eq!(borders.len(), 1, "{kind:?}: the options bar has exactly one border, the panel's (its own would double it): {borders:?}");
     }
 }
