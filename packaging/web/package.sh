@@ -35,8 +35,8 @@ done
 # Size limit (issues #198, #5302): Cloudflare Pages/Workers reject any single file over 25 MiB,
 # and other hosts and CDNs have similar caps. No file in the site may come near that; the app's
 # wasm, the one file that does, ships as parts of PART_BYTES. Override only to investigate.
-MAX_FILE_BYTES="${PHOTOCRAFT_WEB_MAX_FILE_BYTES:-25165824}" # 24 MiB
-PART_BYTES="${PHOTOCRAFT_WEB_PART_BYTES:-20971520}"         # 20 MiB
+MAX_FILE_BYTES=$((10#${PHOTOCRAFT_WEB_MAX_FILE_BYTES:-25165824})) # 24 MiB
+PART_BYTES=$((10#${PHOTOCRAFT_WEB_PART_BYTES:-20971520}))         # 20 MiB
 if [[ "$PART_BYTES" -le 0 ]] || [[ "$PART_BYTES" -gt "$MAX_FILE_BYTES" ]]; then
   echo "error: a part of $PART_BYTES bytes doesn't fit the $MAX_FILE_BYTES-byte file limit" >&2
   exit 1
