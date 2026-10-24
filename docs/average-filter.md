@@ -72,3 +72,54 @@ This test discards the imported layer cache and the smart-filter stage cache,
 then rebuilds from the embedded source. Merely importing or flattening the PSD
 would reuse Photoshop's saved pixels and would not prove execution. The local
 PSD is not committed and the opt-in test does not raise a corpus floor.
+
+## Bounded scratch memory
+
+Average reduces the source in row-major order, in segments of at most 4,096
+pixels. It then mixes the result in parallel groups of at most eight raster
+tiles. Selection coverage is read by row. The reduction keeps the dense
+implementation's order of floating-point additions; the output is independent
+of tile scheduling.
+
+At five channels, the reduction's pixel and coverage buffers total at most
+96 KiB. The output groups hold at most 10 MiB of decoded pixel results, plus
+up to 8 KiB of coverage rows. Source, output and history tiles are separate
+from those scratch bounds and still scale with the image. Empty source tiles
+participate: their default RGB affects the mean, and changing invisible RGB can
+require output tiles even where alpha is zero.
+
+The streaming surface path limits work to 512 × 1024² pixels rather than that
+many decoded channel samples. A synthetic 196 MP test starts the operation and
+cancels after the first progress report; it does not run a complete 196 MP
+filter. Other tests check cancellation during both passes and compare exact
+sample bits against the previous arithmetic across RGB, Gray, CMYK and Lab,
+8/16/32-bit storage, negative coordinates, tile/segment edges and partial masks.
+These are preservation tests, not new Photoshop colour-mode parity claims.
+
+The release example runs a 6,000 × 4,000 RGBA8 case and hashes every output
+sample. Run each mode in a fresh process and collect peak working set externally:
+
+```sh
+cargo run -p photocraft-algo --release --example average_memory -- dense
+cargo run -p photocraft-algo --release --example average_memory -- stream
+cargo run -p photocraft-algo --release --example average_memory -- dense selected
+cargo run -p photocraft-algo --release --example average_memory -- stream selected
+```
+
+`dense` reproduces the original `map_pixels` workspace with the transparency
+correction: raw samples, original RGBA, processed RGBA and coverage, about
+52 bytes/pixel for RGBA. `stream` calls the current public algorithm dispatcher.
+The timer covers filtering; peak working set covers the complete process,
+including source construction and output hashing. This measures CPU algorithms,
+not document history, UI, GPU or Photoshop performance.
+
+### Initial measurements (2026-10-23)
+
+Initial measurements on an Intel Core i7-11370H (4 cores / 8 threads), Windows x64, Rust 1.99.1, normal release profile. One fresh-process pair per case, before rebasing from main `e6d6fb45a` to `1c3db2e5c`; the Average kernel and benchmark source are unchanged, but these numbers have not yet been remeasured with the updated dependencies. MB is decimal.
+
+| 24 MP RGBA8 case | Dense filter time | Streaming filter time | Dense peak working set | Streaming peak working set |
+|---|---:|---:|---:|---:|
+| No selection | 1.909 s | 1.322 s | 1,453.8 MB | 213.2 MB |
+| Partial selection | 3.329 s | 1.278 s | 1,459.5 MB | 218.6 MB |
+
+All four processes exited successfully. Full-output hashes match within each pair: `9d843acc1e6106bf` without a selection and `f8e0e6427433728c` with a partial selection. These are single-run observations, not repeated medians; repeated measurements on the rebased head are pending.

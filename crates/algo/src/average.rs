@@ -46,38 +46,126 @@ fn valid_area(area: Rect, channels: usize) -> bool {
         && u64::from(area.width()).saturating_mul(u64::from(area.height())).saturating_mul(channels as u64) <= 512 * 1024 * 1024
 }
 
+// Row-major reduction preserves the dense implementation's f64 addition order. A fixed
+// width avoids a full-width allocation even for very wide documents.
+const REDUCE_PIXELS: i32 = 4096;
+// At most eight native 256x256 tiles (10 MiB at five channels) are live as float results.
+const OUTPUT_GROUP: usize = 8;
+
+fn coverage_buffer(selection: Option<&Surface>, width: usize) -> Option<Vec<f32>> {
+    let count = if selection.is_some() { width } else { 0 };
+    let mut buffer = Vec::new();
+    buffer.try_reserve_exact(count).ok()?;
+    buffer.resize(count, 0.0);
+    Some(buffer)
+}
+
 pub(crate) fn apply(surface: &Surface, area: Rect, selection: Option<&Surface>, ctl: &Interrupt<'_>) -> Option<Surface> {
     let fmt = surface.format();
     let n = fmt.channels();
-    if !valid_area(area, n) || ctl.cancelled() {
+    // Scratch is bounded now: limit total work in pixels, not full-frame decoded samples.
+    if !valid_area(area, 1) || ctl.cancelled() {
         return None;
     }
     if area.is_empty() {
         return Some(surface.clone());
     }
-    let mut raw = surface.try_read_region(area).ok()?;
-    let width = area.width() as usize;
-    let coverage = |i: usize| selection.map_or(1.0, |s| s.sample_channel(area.x0 + (i % width) as i32, area.y0 + (i / width) as i32, 0));
+    let total = u64::from(area.width()) * u64::from(area.height());
+    let mut done = 0u64;
     let mut mean = Mean::default();
-    for (i, px) in raw.chunks_exact(n).enumerate() {
-        if i % width == 0 && ctl.cancelled() {
-            return None;
+    let mut cover = coverage_buffer(selection, area.width().min(REDUCE_PIXELS as u32) as usize)?;
+    for y in area.y0..area.y1 {
+        let mut x = area.x0;
+        while x < area.x1 {
+            if ctl.cancelled() {
+                return None;
+            }
+            let end = x.saturating_add(REDUCE_PIXELS).min(area.x1);
+            let row = Rect::new(x, y, end, y + 1);
+            let raw = surface.try_read_region(row).ok()?;
+            if let Some(selection) = selection {
+                let cover = cover.get_mut(..row.width() as usize)?;
+                selection.sample_row_strided(y, x, 1, 0, cover);
+                for (px, &coverage) in raw.chunks_exact(n).zip(cover.iter()) {
+                    mean.add(&fmt, px, coverage);
+                }
+            } else {
+                for px in raw.chunks_exact(n) {
+                    mean.add(&fmt, px, 1.0);
+                }
+            }
+            done += u64::from(row.width());
+            ctl.progress(0.5 * done as f32 / total as f32);
+            x = end;
         }
-        mean.add(&fmt, px, coverage(i));
     }
-    let Some(colour) = mean.colour() else { return Some(surface.clone()) };
-    for (i, px) in raw.chunks_exact_mut(n).enumerate() {
-        if i % width == 0 && ctl.cancelled() {
-            return None;
-        }
-        mix(&fmt, px, colour, coverage(i));
-    }
-    let mut out = surface.clone();
+    drop(cover);
     if ctl.cancelled() {
         return None;
     }
-    out.try_write_region(area, &raw).ok()?;
+    let Some(colour) = mean.colour() else {
+        ctl.progress(1.0);
+        return Some(surface.clone());
+    };
+    let run = |r: &Rect| -> Option<(Rect, Vec<f32>)> {
+        if ctl.cancelled() {
+            return None;
+        }
+        let mut raw = surface.try_read_region(*r).ok()?;
+        let width = r.width() as usize;
+        let row_samples = width.checked_mul(n)?;
+        if row_samples == 0 {
+            return None;
+        }
+        let mut cover = coverage_buffer(selection, width)?;
+        for (y, row) in raw.chunks_exact_mut(row_samples).enumerate() {
+            if ctl.cancelled() {
+                return None;
+            }
+            if let Some(selection) = selection {
+                selection.sample_row_strided(r.y0 + y as i32, r.x0, 1, 0, &mut cover);
+                for (px, &coverage) in row.chunks_exact_mut(n).zip(&cover) {
+                    mix(&fmt, px, colour, coverage);
+                }
+            } else {
+                for px in row.chunks_exact_mut(n) {
+                    mix(&fmt, px, colour, 1.0);
+                }
+            }
+        }
+        Some((*r, raw))
+    };
+    let mut out = surface.clone();
+    let mut tiles = area.tiles();
+    done = 0;
+    loop {
+        if ctl.cancelled() {
+            return None;
+        }
+        let chunk: Vec<_> = tiles.by_ref().take(OUTPUT_GROUP).map(|t| t.rect().intersect(&area)).collect();
+        if chunk.is_empty() {
+            break;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        let results: Option<Vec<_>> = {
+            use rayon::prelude::*;
+            chunk.par_iter().map(run).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let results: Option<Vec<_>> = chunk.iter().map(run).collect();
+        for (r, data) in results? {
+            if ctl.cancelled() {
+                return None;
+            }
+            out.try_write_region(r, &data).ok()?;
+            done += u64::from(r.width()) * u64::from(r.height());
+        }
+        ctl.progress(0.5 + 0.5 * done as f32 / total as f32);
+    }
     out.prune();
+    if ctl.cancelled() {
+        return None;
+    }
     ctl.progress(1.0);
     Some(out)
 }
