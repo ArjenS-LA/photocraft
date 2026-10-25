@@ -113,13 +113,31 @@ The timer covers filtering; peak working set covers the complete process,
 including source construction and output hashing. This measures CPU algorithms,
 not document history, UI, GPU or Photoshop performance.
 
-### Initial measurements (2026-10-23)
+### Repeated measurements (2026-10-24)
 
-Initial measurements on an Intel Core i7-11370H (4 cores / 8 threads), Windows x64, Rust 1.99.1, normal release profile. One fresh-process pair per case, before rebasing from main `e6d6fb45a` to `1c3db2e5c`; the Average kernel and benchmark source are unchanged, but these numbers have not yet been remeasured with the updated dependencies. MB is decimal.
+Measured on an Intel Core i7-11370H (4 cores / 8 threads), Windows x64/MSVC,
+Rust 1.99.1, with the normal release profile. The executable was rebuilt from
+`1c38945f8ba94c989c609ec142964367df33835e`, whose tested upstream base is
+`1c3db2e5c35a4f8c544011e57c8026ccb9741926`. These measurements supersede the
+earlier single-run observations from before that rebase.
 
-| 24 MP RGBA8 case | Dense filter time | Streaming filter time | Dense peak working set | Streaming peak working set |
+Each case ran five dense/stream pairs, alternating modes in fresh processes
+after the compiler and other benchmark processes had exited. The table reports
+median filtering time and median per-process peak working set; MB is decimal.
+Peak working set was read through Windows' process high-water mark at 25 ms
+intervals. It includes source construction and output hashing as described above.
+
+| 24 MP RGBA8 case | Dense median time | Streaming median time | Dense median peak working set | Streaming median peak working set |
 |---|---:|---:|---:|---:|
-| No selection | 1.909 s | 1.322 s | 1,453.8 MB | 213.2 MB |
-| Partial selection | 3.329 s | 1.278 s | 1,459.5 MB | 218.6 MB |
+| No selection | 1.914 s | 1.098 s | 1,453.8 MB | 213.2 MB |
+| Partial selection | 2.626 s | 1.169 s | 1,459.5 MB | 218.9 MB |
 
-All four processes exited successfully. Full-output hashes match within each pair: `9d843acc1e6106bf` without a selection and `f8e0e6427433728c` with a partial selection. These are single-run observations, not repeated medians; repeated measurements on the rebased head are pending.
+All 20 processes exited successfully. All ten full-output hashes in each case
+match: `9d843acc1e6106bf` without a selection and `f8e0e6427433728c` with a partial
+selection. Filtering times ranged from 1.772–1.977 s dense and 0.948–1.188 s
+streaming without a selection, and 2.455–2.745 s dense and 1.095–1.311 s streaming
+with the partial selection. Five runs on one Windows machine establish these
+observations, not a cross-platform performance guarantee.
+
+[Per-run measurements and executable SHA-256](average-filter-benchmark-2026-10-24.json)
+retain the raw timings, peak-memory readings, hashes and source commit.
